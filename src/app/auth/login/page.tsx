@@ -1,185 +1,191 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Facebook, Mail } from 'lucide-react';
+import { Loader2, Wallet, BookOpen, Video, ShieldCheck } from 'lucide-react';
+import { connectFreighter, isFreighterInstalled, signNonce } from '@/lib/stellar/freighter';
+import { authApi } from '@/lib/api/services';
+import { useAuthStore } from '@/lib/hooks/use-auth-store';
+import { Networks } from '@stellar/stellar-sdk';
 
-type LoginValues = {
-  email: string;
-  password: string;
-  rememberMe: boolean;
-};
-
-type LoginErrors = Partial<Record<keyof LoginValues, string>>;
+type Step = 'idle' | 'connecting' | 'signing' | 'verifying' | 'done';
+type Role = 'STUDENT' | 'INSTRUCTOR';
 
 export default function LoginPage() {
-  const [values, setValues] = useState<LoginValues>({
-    email: '',
-    password: '',
-    rememberMe: false,
-  });
-  const [errors, setErrors] = useState<LoginErrors>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const router = useRouter();
+  const params = useSearchParams();
+  const callbackUrl = params.get('callbackUrl') ?? '/dashboard/courses';
+  const defaultRole = (params.get('role') as Role) ?? 'STUDENT';
 
-  const hasErrors = useMemo(() => Object.values(errors).some(Boolean), [errors]);
+  const { setAuth, isConnected } = useAuthStore();
+  const [role, setRole]          = useState<Role>(defaultRole);
+  const [step, setStep]          = useState<Step>('idle');
+  const [error, setError]        = useState<string | null>(null);
+  const [hasFreighter, setHasFreighter] = useState<boolean | null>(null);
 
-  const validate = (nextValues: LoginValues) => {
-    const nextErrors: LoginErrors = {};
-    if (!nextValues.email.trim()) {
-      nextErrors.email = 'Email is required.';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextValues.email)) {
-      nextErrors.email = 'Enter a valid email address.';
+  useEffect(() => { if (isConnected) router.replace(callbackUrl); }, [isConnected]);
+  useEffect(() => { isFreighterInstalled().then(setHasFreighter); }, []);
+
+  const handleConnect = async () => {
+    setError(null);
+    try {
+      setStep('connecting');
+      const address = await connectFreighter();
+      const nonce   = await authApi.getNonce(address);
+
+      setStep('signing');
+      const networkPassphrase = process.env.NEXT_PUBLIC_STELLAR_NETWORK === 'mainnet'
+        ? Networks.PUBLIC : Networks.TESTNET;
+      const signedNonce = await signNonce(nonce, networkPassphrase);
+
+      setStep('verifying');
+      const { accessToken, user } = await authApi.login({
+        stellarAddress: address,
+        signedNonce,
+        signature: signedNonce,
+        role,
+      });
+
+      setAuth(address, accessToken, user);
+      setStep('done');
+      router.replace(callbackUrl);
+    } catch (err: any) {
+      setError(err?.message ?? 'Connection failed. Please try again.');
+      setStep('idle');
     }
-    if (!nextValues.password.trim()) {
-      nextErrors.password = 'Password is required.';
-    } else if (nextValues.password.length < 8) {
-      nextErrors.password = 'Password must be at least 8 characters.';
-    }
-    setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
   };
 
-  const onSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const isValid = validate(values);
-    if (!isValid) return;
-    setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    setIsSubmitting(false);
+  const stepLabel: Record<Step, string> = {
+    idle:      'Connect Freighter Wallet',
+    connecting:'Connecting to wallet…',
+    signing:   'Sign the message in Freighter…',
+    verifying: 'Verifying with server…',
+    done:      'Redirecting…',
   };
+
+  const isLoading = step !== 'idle';
 
   return (
-    <div className="min-h-screen bg-[#EEEDFE] p-4 sm:p-6">
-      <div className="mx-auto grid min-h-[calc(100vh-2rem)] w-full max-w-6xl overflow-hidden rounded-3xl bg-white shadow-lg lg:grid-cols-2">
-        <section className="order-2 flex items-center justify-center p-6 sm:p-10 lg:order-1">
-          <div className="w-full max-w-md">
-            <Link href="/" className="mb-8 inline-block font-display text-3xl font-bold text-[#26215C]">
-              Hamplard
-            </Link>
-            <h1 className="mb-2 text-3xl font-bold text-[#26215C]">Welcome back</h1>
-            <p className="mb-6 text-sm text-[#554F99]">
-              Continue your learning journey and pick up where you left off.
-            </p>
+    <div className="min-h-screen bg-ink-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-md animate-fade-in">
 
-            <form className="space-y-4" onSubmit={onSubmit} noValidate>
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-[#26215C]" htmlFor="email">
-                  Email
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  value={values.email}
-                  onChange={(event) => setValues((prev) => ({ ...prev, email: event.target.value }))}
-                  onBlur={() => validate(values)}
-                  className={`w-full rounded-xl border px-4 py-2.5 text-sm text-[#26215C] outline-none transition ${
-                    errors.email ? 'border-red-400 bg-red-50/40' : 'border-[#D3D0F2] focus:border-[#7F77DD]'
-                  }`}
-                  placeholder="you@example.com"
-                  aria-invalid={!!errors.email}
-                />
-                {errors.email && <p className="mt-1 text-xs text-red-600">{errors.email}</p>}
-              </div>
+        {/* Logo */}
+        <Link href="/" className="flex items-center justify-center gap-2 mb-8">
+          <span className="font-display text-2xl font-bold text-ink-900">Hamplard</span>
+        </Link>
 
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-[#26215C]" htmlFor="password">
-                  Password
-                </label>
-                <input
-                  id="password"
-                  type="password"
-                  value={values.password}
-                  onChange={(event) => setValues((prev) => ({ ...prev, password: event.target.value }))}
-                  onBlur={() => validate(values)}
-                  className={`w-full rounded-xl border px-4 py-2.5 text-sm text-[#26215C] outline-none transition ${
-                    errors.password ? 'border-red-400 bg-red-50/40' : 'border-[#D3D0F2] focus:border-[#7F77DD]'
-                  }`}
-                  placeholder="Enter your password"
-                  aria-invalid={!!errors.password}
-                />
-                {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
-              </div>
+        <div className="card p-8">
+          <h1 className="font-display text-2xl font-semibold text-ink-900 mb-1">
+            Welcome back
+          </h1>
+          <p className="text-sm text-ink-500 mb-6">
+            Connect your Freighter wallet to access the platform.
+          </p>
 
-              <div className="flex items-center justify-between gap-3">
-                <label className="inline-flex items-center gap-2 text-sm text-[#26215C]">
-                  <input
-                    type="checkbox"
-                    checked={values.rememberMe}
-                    onChange={(event) => setValues((prev) => ({ ...prev, rememberMe: event.target.checked }))}
-                    className="h-4 w-4 rounded border-[#B3ADDF] text-[#7F77DD] focus:ring-[#7F77DD]"
-                  />
-                  Remember me
-                </label>
-                <Link href="#" className="text-sm font-medium text-[#3C3489] hover:underline">
-                  Forgot password?
-                </Link>
-              </div>
-
+          {/* Role selector */}
+          <div className="mb-6">
+            <p className="label">I want to</p>
+            <div className="grid grid-cols-2 gap-3">
               <button
-                type="submit"
-                className="w-full rounded-xl bg-[#7F77DD] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#3C3489]"
-                disabled={isSubmitting}
+                onClick={() => setRole('STUDENT')}
+                className={`p-3.5 rounded-xl border-2 text-left transition-all ${
+                  role === 'STUDENT'
+                    ? 'border-saffron-500 bg-saffron-50'
+                    : 'border-ink-100 bg-white hover:border-ink-200'
+                }`}
               >
-                {isSubmitting ? 'Signing in...' : 'Login'}
+                <BookOpen className={`w-4 h-4 mb-1.5 ${role === 'STUDENT' ? 'text-saffron-600' : 'text-ink-400'}`} />
+                <p className={`text-sm font-medium ${role === 'STUDENT' ? 'text-saffron-700' : 'text-ink-700'}`}>
+                  Learn a skill
+                </p>
+                <p className="text-xs text-ink-400 mt-0.5">Student account</p>
               </button>
-
-              <div className="relative py-2">
-                <div className="h-px bg-[#E0DEFA]" />
-                <span className="absolute left-1/2 top-0 -translate-x-1/2 bg-white px-3 text-xs font-medium text-[#6B66A6]">
-                  or continue with
-                </span>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <button type="button" className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#D3D0F2] px-4 py-2.5 text-sm font-medium text-[#26215C] hover:bg-[#EEEDFE]">
-                  <Mail className="h-4 w-4" />
-                  Google
-                </button>
-                <button type="button" className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#D3D0F2] px-4 py-2.5 text-sm font-medium text-[#26215C] hover:bg-[#EEEDFE]">
-                  <Facebook className="h-4 w-4" />
-                  Facebook
-                </button>
-              </div>
-            </form>
-
-            {hasErrors && (
-              <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
-                Please fix the highlighted fields and try again.
-              </p>
-            )}
-
-            <p className="mt-6 text-sm text-[#554F99]">
-              New to Hamplard?{' '}
-              <Link href="/auth/signup" className="font-semibold text-[#3C3489] hover:underline">
-                Create an account
-              </Link>
-            </p>
-          </div>
-        </section>
-
-        <section className="order-1 flex min-h-[260px] items-center justify-center bg-gradient-to-br from-[#26215C] to-[#3C3489] p-8 lg:order-2">
-          <div className="max-w-sm text-white">
-            <p className="mb-2 text-xs uppercase tracking-[0.18em] text-[#EEEDFE]">Learn smarter</p>
-            <h2 className="mb-4 font-display text-4xl font-bold leading-tight">
-              Build practical skills that move your career forward.
-            </h2>
-            <p className="text-sm leading-relaxed text-[#EEEDFE]">
-              Access guided courses, track progress, and earn trusted certificates with Hamplard.
-            </p>
-            <div className="mt-6 grid grid-cols-3 gap-3 text-center">
-              {[
-                ['10k+', 'Students'],
-                ['200+', 'Courses'],
-                ['95%', 'Completion'],
-              ].map(([value, label]) => (
-                <div key={label} className="rounded-xl bg-white/10 px-3 py-2">
-                  <p className="text-base font-semibold">{value}</p>
-                  <p className="text-xs text-[#EEEDFE]">{label}</p>
-                </div>
-              ))}
+              <button
+                onClick={() => setRole('INSTRUCTOR')}
+                className={`p-3.5 rounded-xl border-2 text-left transition-all ${
+                  role === 'INSTRUCTOR'
+                    ? 'border-saffron-500 bg-saffron-50'
+                    : 'border-ink-100 bg-white hover:border-ink-200'
+                }`}
+              >
+                <Video className={`w-4 h-4 mb-1.5 ${role === 'INSTRUCTOR' ? 'text-saffron-600' : 'text-ink-400'}`} />
+                <p className={`text-sm font-medium ${role === 'INSTRUCTOR' ? 'text-saffron-700' : 'text-ink-700'}`}>
+                  Teach a skill
+                </p>
+                <p className="text-xs text-ink-400 mt-0.5">Instructor account</p>
+              </button>
             </div>
           </div>
-        </section>
+
+          {/* Freighter not installed */}
+          {hasFreighter === false && (
+            <div className="mb-5 p-4 rounded-xl bg-saffron-50 border border-saffron-100">
+              <p className="text-sm font-medium text-saffron-800 mb-1">Freighter wallet not found</p>
+              <p className="text-xs text-saffron-700 mb-3">
+                Install the Freighter browser extension to sign in with your Stellar address.
+              </p>
+              <a href="https://freighter.app" target="_blank" rel="noreferrer"
+                className="btn-primary text-xs px-3 py-1.5">
+                Install Freighter →
+              </a>
+            </div>
+          )}
+
+          {error && (
+            <div className="mb-4 p-3.5 rounded-xl bg-red-50 border border-red-100">
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handleConnect}
+            disabled={isLoading || hasFreighter === false}
+            className="btn-primary w-full text-base py-3"
+          >
+            {isLoading
+              ? <><Loader2 className="w-4 h-4 animate-spin" />{stepLabel[step]}</>
+              : <><Wallet className="w-4 h-4" />{stepLabel.idle}</>
+            }
+          </button>
+
+          {isLoading && (
+            <div className="mt-4 space-y-2">
+              {(['connecting', 'signing', 'verifying'] as Step[]).map((s, i) => {
+                const order = ['connecting', 'signing', 'verifying'];
+                const cur   = order.indexOf(step);
+                const idx   = order.indexOf(s);
+                return (
+                  <div key={s} className="flex items-center gap-2.5 text-xs">
+                    <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 transition-all text-[10px] font-semibold ${
+                      idx < cur  ? 'bg-leaf-500 text-white' :
+                      s === step ? 'bg-saffron-500 text-white' : 'bg-ink-100 text-ink-400'
+                    }`}>
+                      {idx < cur ? '✓' : i + 1}
+                    </div>
+                    <span className={s === step ? 'text-ink-900 font-medium' : 'text-ink-400'}>
+                      {stepLabel[s]}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 grid grid-cols-3 gap-3 text-center">
+          {[
+            { icon: ShieldCheck, label: 'Secure payments', sub: 'Stellar blockchain' },
+            { icon: BookOpen,    label: 'Structured learning', sub: 'Beginner to pro' },
+            { icon: Video,       label: 'Your certificate', sub: 'Verifiable on-chain' },
+          ].map(({ icon: Icon, label, sub }) => (
+            <div key={label} className="card p-3">
+              <Icon className="w-4 h-4 text-saffron-600 mx-auto mb-1.5" />
+              <p className="text-xs font-medium text-ink-700">{label}</p>
+              <p className="text-[10px] text-ink-400 mt-0.5">{sub}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
